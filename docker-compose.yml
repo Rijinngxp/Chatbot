@@ -1,0 +1,31 @@
+# Run the whole app:   docker compose up -d --build
+# Open:                http://<server-ip>   (or http://localhost when running on your PC)
+#
+# Secrets come from backend/.env on the machine running Docker (never baked into the image).
+
+services:
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      # Container-specific values; these override whatever backend/.env says.
+      HOST: 0.0.0.0
+      PORT: 8000
+      CHROMA_PATH: /data/chroma
+      MODEL_CACHE_DIR: /models
+    volumes:
+      - chroma-data:/data          # uploaded documents survive restarts and redeploys
+    restart: unless-stopped
+    # Only one backend instance: the embedded ChromaDB + in-memory BM25 index are single-process.
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  chroma-data:

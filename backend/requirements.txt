@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+groq
+openai
+tavily-python
+chromadb
+py-rust-stemmers
+fastembed
+pypdf
+python-dotenv
+python-multipart
+pydantic-settings
