@@ -23,6 +23,7 @@ def config() -> dict:
         "web_search": s.web_search_available,
         "verifier": s.enable_verifier,
         "reranker": s.enable_reranker,
+        "memory": s.memory_available,
         # e.g. {"planner": "ollama · qwen3:4b", "verifier": "groq · openai/gpt-oss-120b", ...}
         "models": {a: " · ".join(s.agent_llm(a)) for a in ("planner", "verifier", "synthesizer")},
         # Only a problem when some agent actually uses Groq.

@@ -44,6 +44,8 @@ export default function PipelinePanel({ run }) {
             <span className="tag tag-blocked"><Icon name="shield" size={12} /> Blocked by safety check</span>
           ) : run.route === "greeting" ? (
             <span className="tag tag-fast"><Icon name="sparkles" size={12} /> Greeting · fast path</span>
+          ) : run.route === "memory" ? (
+            <span className="tag tag-fast"><Icon name="bookmark" size={12} /> Answered from memory</span>
           ) : run.webSearch ? (
             <span className="tag"><Icon name="globe" size={12} /> Web search</span>
           ) : (
@@ -74,6 +76,15 @@ export default function PipelinePanel({ run }) {
                   {s.detail && <> · {s.detail}</>}
                 </div>
 
+                {stage.key === "memory" && run.memories.length > 0 && (
+                  <div className="step-card">
+                    <span className="card-label">What I remember about you</span>
+                    <ul className="memory-list">
+                      {run.memories.map((m) => <li key={m.id}>{m.text}</li>)}
+                    </ul>
+                  </div>
+                )}
+
                 {stage.key === "planner" && run.reasoning && (
                   <div className="step-card">
                     <span className="card-label">Decision · {run.route === "unsafe" ? "blocked" : run.route}</span>
@@ -81,7 +92,7 @@ export default function PipelinePanel({ run }) {
                   </div>
                 )}
 
-                {stage.key === "planner" && run.query && run.route !== "greeting" && (
+                {stage.key === "planner" && run.query && run.route === "search" && (
                   <div className="step-card">
                     <span className="card-label">Search query</span>
                     <span>{run.query}</span>

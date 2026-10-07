@@ -1,11 +1,12 @@
 // Turns the backend's Server-Sent Events into a "run" object the UI can render.
 
 export const STAGES = [
-  { key: "planner", label: "Planner Agent", icon: "compass", desc: "Greeting or search? Writes the search query" },
+  { key: "memory", label: "Memory", icon: "bookmark", desc: "Recalls what it knows about you (Supermemory)" },
+  { key: "planner", label: "Planner Agent", icon: "compass", desc: "Answer in memory, greeting or search? Writes the search query" },
   { key: "rag", label: "RAG Search", icon: "database", desc: "Hybrid search over your documents" },
   { key: "web", label: "Web Search", icon: "globe", desc: "Tavily web search" },
   { key: "verifier", label: "Verifier Agent", icon: "shield", desc: "Checks the question against the retrieved chunks" },
-  { key: "synthesizer", label: "Synthesizer Agent", icon: "pen", desc: "Writes the answer" },
+  { key: "synthesizer", label: "Synthesizer Agent", icon: "pen", desc: "Thinks, then writes the answer" },
 ];
 
 export function newRun(question, webSearch) {
@@ -16,9 +17,10 @@ export function newRun(question, webSearch) {
     endedAt: null,
     stages: Object.fromEntries(STAGES.map((s) => [s.key, { status: "pending", detail: "", start: null, end: null }])),
     log: [],
-    route: null, // planner's decision: "greeting" | "search"
+    route: null, // planner's decision: "greeting" | "memory" | "search" | "unsafe"
     reasoning: null, // planner's explanation
     query: null, // planner's search query
+    memories: [], // facts recalled about the user before planning
     verifications: [],
     sourceCount: 0,
     outcome: null, // "answered" | "blocked" | "error" | "stopped"
@@ -43,6 +45,7 @@ export function applyEvent(run, evt) {
       if (evt.route) r.route = evt.route;
       if (evt.reasoning) r.reasoning = evt.reasoning;
       if (evt.query) r.query = evt.query;
+      if (evt.memories) r.memories = evt.memories;
       r.log = [...r.log, { t: now, stage: evt.stage, status: evt.status, text: evt.detail || evt.status }];
       break;
     }

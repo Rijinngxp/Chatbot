@@ -1,15 +1,26 @@
 """Orchestrates the agents and yields event dicts that the API streams to the UI as Server-Sent Events.
 
-    greeting:            Planner -> Synthesizer
-    search (web off):    Planner -> RAG search -> Verifier (question + chunks) -> Synthesizer
-    search (web on):     Planner -> Web search -> Verifier (question + results) -> Synthesizer
-    unsafe:              Planner or Verifier -> blocked
+Supermemory first recalls what it remembers about the user (fails soft); the planner then decides with those
+memories in view. Every answered turn is saved back to memory in the background:
+
+    unsafe:              Memory -> Planner -> blocked
+    greeting:            Memory -> Planner -> Synthesizer
+    answer in memory:    Memory -> Planner -> Synthesizer            (no RAG / web / verifier)
+    search (web off):    Memory -> Planner -> RAG search -> Verifier (question + chunks) -> Synthesizer
+    search (web on):     Memory -> Planner -> Web search -> Verifier (question + results) -> Synthesizer
+    unsafe (late):       Verifier -> blocked
+
+The planner uses the memories to turn personal references ("weather in my city") into concrete search queries.
+The verifier and the synthesizer are reasoning agents: they think (VERIFIER_/SYNTHESIZER_REASONING_EFFORT)
+before they answer.
 
 Explicit content is stopped in three layers: the planner (before any search), the verifier (question + every
 source; unsafe sources are dropped), and the synthesizer/greeting prompts (never produce explicit content).
+Blocked turns are never saved to memory.
 """
 from collections.abc import AsyncIterator
 
+from . import memory
 from .agents import PlannerAgent, SynthesizerAgent, VerifierAgent
 from .config import get_settings
 from .tools import rag_tool, web_search
@@ -42,14 +53,61 @@ def blocked_events(categories: list[str], skip: tuple[str, ...]) -> list[dict]:
     return events
 
 
-async def run_pipeline(question: str, history: list[dict], use_web: bool) -> AsyncIterator[dict]:
+async def write_answer(
+    question: str,
+    history: list[dict],
+    sources: list[dict],
+    verification: dict | None,
+    memories: list[dict],
+    from_memory: bool = False,
+) -> AsyncIterator[dict]:
+    """The synthesizer thinks (SYNTHESIZER_REASONING_EFFORT), then streams the answer. Ends with the "done" event."""
+    yield stage("synthesizer", "running", "Answering from memory" if from_memory else "Thinking, then writing the answer")
+    answer = ""
+    async for token in synthesizer.stream(question, history, sources, verification, memories, from_memory):
+        answer += token
+        yield {"type": "token", "content": token}
+    yield stage("synthesizer", "done")
+    yield {"type": "done", "answer": answer}
+
+
+async def run_pipeline(
+    question: str,
+    history: list[dict],
+    use_web: bool,
+    user_id: str | None = None,
+    conversation_id: str | None = None,
+) -> AsyncIterator[dict]:
     s = get_settings()
 
-    # 1. Planner: unsafe, greeting or search?
-    yield stage("planner", "running", "Understanding the request")
-    plan = await planner.plan(question, history)
+    def remember(answer: str) -> None:
+        if user_id and answer.strip() and s.memory_available and s.memory_save_conversations:
+            memory.save_turn_in_background(user_id, conversation_id, question, answer)
 
-    if plan["route"] == "unsafe" and s.block_explicit_content:
+    # 1. Memory: what do we already know about this user?
+    memories: list[dict] = []
+    if not s.memory_available:
+        yield stage("memory", "skipped", "Disabled (ENABLE_MEMORY / SUPERMEMORY_API_KEY)")
+    elif not user_id:
+        yield stage("memory", "skipped", "No user id sent")
+    else:
+        yield stage("memory", "running", "Recalling what I know about you")
+        try:
+            memories = await memory.recall(user_id, question)
+            n = len(memories)
+            detail = f"{n} memor{'y' if n == 1 else 'ies'} recalled" if n else "Nothing remembered yet"
+            yield stage("memory", "done", detail, memories=memories)
+        except TimeoutError:
+            yield stage("memory", "warning", f"Timed out after {s.memory_timeout:g}s; continuing without memory")
+        except Exception as exc:  # memory is a nice-to-have: never let it break the answer
+            yield stage("memory", "warning", f"Unavailable, continuing without memory ({exc})")
+
+    # 2. Planner (sees the memories): unsafe, greeting, answered by memory, or search?
+    yield stage("planner", "running", "Understanding the request")
+    plan = await planner.plan(question, history, memories)
+    route = plan["route"]
+
+    if route == "unsafe" and s.block_explicit_content:
         categories = plan["unsafe_categories"]
         label = ", ".join(categories) or "explicit content"
         yield stage("planner", "blocked", f"Unsafe request ({label})", route="unsafe", reasoning=plan["reasoning"])
@@ -58,26 +116,40 @@ async def run_pipeline(question: str, history: list[dict], use_web: bool) -> Asy
             yield event
         return
 
-    if plan["route"] == "greeting":
+    # 3a. The answer is already in memory: straight to the synthesizer, no search
+    if route == "memory":
+        yield stage("planner", "done", "Answer found in memory: straight to synthesizer", route="memory",
+                    reasoning=plan["reasoning"])
+        for name in ("rag", "web", "verifier"):
+            yield stage(name, "skipped", "Answered from memory")
+        yield {"type": "sources", "sources": []}
+        async for event in write_answer(question, history, [], None, memories, from_memory=True):
+            if event["type"] == "done":
+                remember(event["answer"])
+            yield event
+        return
+
+    if route == "greeting":
         yield stage("planner", "done", "Greeting: straight to synthesizer", route="greeting", reasoning=plan["reasoning"])
         for name in ("rag", "web", "verifier"):
             yield stage(name, "skipped", "Not needed for a greeting")
         yield {"type": "sources", "sources": []}
         yield stage("synthesizer", "running", "Replying")
         answer = ""
-        async for token in synthesizer.smalltalk(question, history):
+        async for token in synthesizer.smalltalk(question, history, memories):
             answer += token
             yield {"type": "token", "content": token}
         yield stage("synthesizer", "done")
+        remember(answer)  # greetings often carry facts worth keeping ("Hi, I'm Rijin from Kochi")
         yield {"type": "done", "answer": answer}
         return
 
-    query = plan["search_query"] or question
-    freshness = plan["freshness"]
+    # 3b. Search, with the query the planner wrote (personal references already resolved from memory)
+    query, freshness = plan["search_query"] or question, plan["freshness"]
     detail = "Search needed" + {"realtime": " (today's info)", "recent": " (latest info)"}.get(freshness, "")
     yield stage("planner", "done", detail, route="search", reasoning=plan["reasoning"], query=query, freshness=freshness)
 
-    # 2. Search: the web when the toggle is on, otherwise the knowledge base
+    # Search: the web when the toggle is on, otherwise the knowledge base
     use_web = use_web and s.web_search_available
     sources: list[dict] = []
     if use_web:
@@ -102,7 +174,7 @@ async def run_pipeline(question: str, history: list[dict], use_web: bool) -> Asy
     sources = numbered(sources)
     yield {"type": "sources", "sources": sources}
 
-    # 3. Verifier: strict check of the question and every source. It runs even when nothing was found,
+    # 4. Verifier: strict check of the question and every source. It runs even when nothing was found,
     #    so the question itself always gets a safety check.
     verification = None
     if not s.enable_verifier:
@@ -111,7 +183,7 @@ async def run_pipeline(question: str, history: list[dict], use_web: bool) -> Asy
         checking = f"Checking {len(sources)} sources against the question" if sources else "Checking the question"
         yield stage("verifier", "running", checking)
         try:
-            verification = await verifier.verify(question, sources, freshness=freshness)
+            verification = await verifier.verify(question, sources, freshness=freshness, memories=memories)
         except Exception as exc:  # a verifier failure shouldn't kill the answer; the synthesizer still refuses explicit content
             yield stage("verifier", "error", str(exc))
         if verification:
@@ -139,7 +211,9 @@ async def run_pipeline(question: str, history: list[dict], use_web: bool) -> Asy
             yield {"type": "sources", "sources": sources}
 
             dropped = f", {len(unsafe)} unsafe dropped" if unsafe else ""
-            if not total:
+            if not total and memories and verification["verdict"] == "approve":
+                yield stage("verifier", "done", "Answerable from what I remember about you")
+            elif not total:
                 yield stage("verifier", "warning", "Question is safe; nothing was found to answer it")
             elif verification["verdict"] == "approve" and verification["confidence"] >= s.verifier_min_confidence:
                 yield stage("verifier", "done", f"{len(sources)} of {total} sources relevant{dropped}")
@@ -147,11 +221,8 @@ async def run_pipeline(question: str, history: list[dict], use_web: bool) -> Asy
                 verification["is_sufficient"] = False
                 yield stage("verifier", "warning", f"Not enough information: {len(sources)} of {total} relevant{dropped}")
 
-    # 4. Synthesizer: answer from the verified sources
-    yield stage("synthesizer", "running", "Writing the answer")
-    answer = ""
-    async for token in synthesizer.stream(question, history, sources, verification):
-        answer += token
-        yield {"type": "token", "content": token}
-    yield stage("synthesizer", "done")
-    yield {"type": "done", "answer": answer}
+    # 5. Synthesizer: thinks, then answers from the verified sources
+    async for event in write_answer(question, history, sources, verification, memories):
+        if event["type"] == "done":
+            remember(event["answer"])
+        yield event

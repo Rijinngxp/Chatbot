@@ -43,14 +43,16 @@ class Settings(BaseSettings):
     # --- Verifier agent ---
     verifier_model: str = "openai/gpt-oss-120b"
     verifier_temperature: float = 0.0
-    verifier_max_tokens: int = 2000
+    verifier_max_tokens: int = 4000         # includes the model's thinking tokens
+    verifier_reasoning_effort: str = "high" # how hard the verifier thinks: low | medium | high | "" = model default
     verifier_min_confidence: float = 0.5    # below this the sources are treated as not enough to answer
     block_explicit_content: bool = True
 
     # --- Synthesizer agent ---
     synthesizer_model: str = "openai/gpt-oss-120b"
     synthesizer_temperature: float = 0.4
-    synthesizer_max_tokens: int = 2500
+    synthesizer_max_tokens: int = 4000      # includes the model's thinking tokens
+    synthesizer_reasoning_effort: str = "high"  # how hard it thinks before answering: low | medium | high | "" = default
 
     # --- Embeddings / reranker (fastembed, local ONNX) ---
     embedding_model: str = "BAAI/bge-small-en-v1.5"
@@ -88,6 +90,16 @@ class Settings(BaseSettings):
     tavily_search_depth: str = "advanced"       # basic | advanced
     tavily_include_answer: bool = False
 
+    # --- Long-term user memory (Supermemory) ---
+    enable_memory: bool = True
+    supermemory_api_key: str = ""
+    supermemory_base_url: str = ""              # empty = Supermemory cloud; e.g. http://localhost:6767 when self-hosted
+    memory_save_conversations: bool = True      # false = recall only, never write new memories
+    memory_instant_extraction: bool = True      # extract facts from each turn right away (+1 billed op per turn)
+    memory_max_items: int = 10                  # remembered facts passed to the agents
+    memory_min_similarity: float = 0.5          # question-matched memories below this are ignored
+    memory_timeout: float = 4.0                 # seconds; recall is skipped if Supermemory is slower
+
     # --- Server (uvicorn) ---
     host: str = "127.0.0.1"
     port: int = 8000
@@ -114,6 +126,11 @@ class Settings(BaseSettings):
     @property
     def web_search_available(self) -> bool:
         return self.enable_web_search and bool(self.tavily_api_key)
+
+    @property
+    def memory_available(self) -> bool:
+        # The cloud needs an API key; a self-hosted server (SUPERMEMORY_BASE_URL) may not.
+        return self.enable_memory and bool(self.supermemory_api_key or self.supermemory_base_url)
 
 
 @lru_cache

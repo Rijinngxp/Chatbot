@@ -17,7 +17,7 @@ async def chat_stream(req: ChatRequest) -> StreamingResponse:
 
     async def events():
         try:
-            async for event in run_pipeline(req.message, history, req.web_search):
+            async for event in run_pipeline(req.message, history, req.web_search, req.user_id, req.conversation_id):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:
             log.exception("pipeline failed")
@@ -31,7 +31,7 @@ async def chat_complete(req: ChatRequest) -> ChatResponse:
     history = [m.model_dump() for m in req.history]
     answer, blocked, sources, verification, stages = "", False, [], None, []
     try:
-        async for event in run_pipeline(req.message, history, req.web_search):
+        async for event in run_pipeline(req.message, history, req.web_search, req.user_id, req.conversation_id):
             match event["type"]:
                 case "stage":
                     stages.append(event)

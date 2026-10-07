@@ -4,6 +4,7 @@ from datetime import date
 
 from . import llm
 from .config import get_settings
+from .memory import format_memories
 from .prompt import (
     PLANNER_SYSTEM,
     PLANNER_USER,
@@ -13,6 +14,12 @@ from .prompt import (
     SYNTHESIZER_USER,
     VERIFIER_SYSTEM,
     VERIFIER_USER,
+)
+
+# Synthesizer notes when the planner found the answer in the remembered user facts.
+FROM_MEMORY_NOTES = (
+    "question about the user: answer it from what you remember about the user (no search was run); "
+    "if those facts don't contain the answer, say you don't remember that yet"
 )
 
 # The planner returns a small JSON plan, but reasoning models (gpt-oss) spend part of the token budget
@@ -45,13 +52,15 @@ def format_history(history: list[dict]) -> str:
 
 # ---------------------------------------------------------------- Planner agent
 class PlannerAgent:
-    async def plan(self, question: str, history: list[dict]) -> dict:
-        """Decide "greeting" or "search", and write a standalone search query."""
+    async def plan(self, question: str, history: list[dict], memories: list[dict] = ()) -> dict:
+        """Decide "unsafe", "greeting", "memory" (the remembered facts already answer it) or "search", and write
+        a standalone search query, using the memories to resolve personal references ("my city")."""
         s = get_settings()
         prompt = [
             {"role": "system", "content": PLANNER_SYSTEM},
             {"role": "user", "content": PLANNER_USER.format(
-                today=today_str(), history=format_history(history), question=question
+                today=today_str(), user_context=format_memories(memories), history=format_history(history),
+                question=question,
             )},
         ]
         try:
@@ -62,7 +71,9 @@ class PlannerAgent:
                 "unsafe_categories": [], "reasoning": f"Planning failed ({exc}); searching.",
             }
 
-        route = plan.get("route") if plan.get("route") in ("unsafe", "greeting") else "search"
+        route = plan.get("route") if plan.get("route") in ("unsafe", "greeting", "memory") else "search"
+        if route == "memory" and not memories:  # nothing remembered, so memory can't be the answer
+            route = "search"
         query = (plan.get("search_query") or "").strip()
         if route == "search" and (not query or not s.enable_query_rewrite):
             query = question
@@ -78,11 +89,14 @@ class PlannerAgent:
 
 # ---------------------------------------------------------------- Verifier agent
 class VerifierAgent:
-    async def verify(self, question: str, sources: list[dict], freshness: str = "any") -> dict:
+    async def verify(
+        self, question: str, sources: list[dict], freshness: str = "any", memories: list[dict] = ()
+    ) -> dict:
         """Check the question against the retrieved chunks: relevance, freshness, sufficiency, explicit content."""
         s = get_settings()
         user = VERIFIER_USER.format(
-            today=today_str(), freshness=freshness, question=question, sources=format_sources(sources)
+            today=today_str(), freshness=freshness, user_context=format_memories(memories), question=question,
+            sources=format_sources(sources),
         )
         result = await llm.complete_json(
             "verifier",
@@ -110,16 +124,18 @@ class VerifierAgent:
 # ---------------------------------------------------------------- Synthesizer agent
 class SynthesizerAgent:
     async def stream(
-        self, question: str, history: list[dict], sources: list[dict], verification: dict | None
+        self, question: str, history: list[dict], sources: list[dict], verification: dict | None,
+        memories: list[dict] = (), from_memory: bool = False,
     ) -> AsyncIterator[str]:
-        """Write the final answer from the verified sources."""
+        """Think, then write the final answer from the verified sources (or, with from_memory, from the user's
+        memories). Reasoning depth comes from SYNTHESIZER_REASONING_EFFORT."""
         s = get_settings()
-        notes = "(not verified)"
+        notes = FROM_MEMORY_NOTES if from_memory else "(not verified)"
         if verification:
             notes = f"sufficient={verification.get('is_sufficient')}; missing={verification.get('missing') or 'nothing'}"
         user = SYNTHESIZER_USER.format(
-            today=today_str(), history=format_history(history), question=question,
-            sources=format_sources(sources), notes=notes,
+            today=today_str(), user_context=format_memories(memories), history=format_history(history),
+            question=question, sources=format_sources(sources), notes=notes,
         )
         async for token in llm.stream(
             "synthesizer",
@@ -129,14 +145,17 @@ class SynthesizerAgent:
         ):
             yield token
 
-    async def smalltalk(self, question: str, history: list[dict]) -> AsyncIterator[str]:
+    async def smalltalk(self, question: str, history: list[dict], memories: list[dict] = ()) -> AsyncIterator[str]:
         """Friendly reply to greetings — no search, no verification."""
         s = get_settings()
-        user = SMALLTALK_USER.format(history=format_history(history), question=question)
+        user = SMALLTALK_USER.format(
+            user_context=format_memories(memories), history=format_history(history), question=question
+        )
         async for token in llm.stream(
             "synthesizer",
             [{"role": "system", "content": SMALLTALK_SYSTEM}, {"role": "user", "content": user}],
             s.synthesizer_temperature,
             400,
+            effort="low",  # a greeting needs no deep thinking
         ):
             yield token

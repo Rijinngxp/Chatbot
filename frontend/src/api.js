@@ -1,4 +1,25 @@
 const BASE = "/api";
+const USER_KEY = "chatbot.userId";
+
+export const newId = () => crypto.randomUUID();
+
+/**
+ * Anonymous id for this browser, used to scope long-term memory. It is not authentication:
+ * anyone who has it can read that memory, so add real login before exposing the app publicly.
+ */
+export function userId() {
+  try {
+    let id = localStorage.getItem(USER_KEY);
+    if (!id) {
+      id = newId();
+      localStorage.setItem(USER_KEY, id);
+    }
+    return id;
+  } catch {
+    // Storage blocked (e.g. private mode): memory still works for this page load.
+    return (userId.fallback ??= newId());
+  }
+}
 
 export async function getConfig() {
   const r = await fetch(`${BASE}/config`);
@@ -33,12 +54,32 @@ export async function deleteDocument(id) {
   if (!r.ok) throw new Error(await errorText(r));
 }
 
+/** What the assistant remembers about this browser's user. */
+export async function getMemory() {
+  const r = await fetch(`${BASE}/memory`, { headers: { "X-User-Id": userId() } });
+  if (!r.ok) throw new Error(await errorText(r));
+  return (await r.json()).memories;
+}
+
+/** Erases everything remembered about this browser's user. */
+export async function forgetMemory() {
+  const r = await fetch(`${BASE}/memory`, { method: "DELETE", headers: { "X-User-Id": userId() } });
+  if (!r.ok) throw new Error(await errorText(r));
+  return (await r.json()).deleted_memories;
+}
+
 /** POSTs a chat request and calls onEvent for every Server-Sent Event from the agent pipeline. */
-export async function streamChat({ message, history, webSearch }, onEvent, signal) {
+export async function streamChat({ message, history, webSearch, conversationId }, onEvent, signal) {
   const r = await fetch(`${BASE}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, history, web_search: webSearch }),
+    body: JSON.stringify({
+      message,
+      history,
+      web_search: webSearch,
+      user_id: userId(),
+      conversation_id: conversationId,
+    }),
     signal,
   });
   if (!r.ok || !r.body) throw new Error(await errorText(r));

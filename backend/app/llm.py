@@ -28,27 +28,42 @@ def client(provider: str) -> AsyncGroq | AsyncOpenAI:
     return _clients[provider]
 
 
-def _request(agent: str) -> tuple[AsyncGroq | AsyncOpenAI, dict]:
-    """Client + base request params (model, provider-specific options) for an agent."""
+def _request(agent: str, effort: str | None = None) -> tuple[AsyncGroq | AsyncOpenAI, dict]:
+    """Client + base request params (model, provider-specific options) for an agent.
+
+    effort overrides the agent's reasoning effort for one call; otherwise VERIFIER_/SYNTHESIZER_REASONING_EFFORT
+    apply (they override OLLAMA_REASONING_EFFORT for those agents)."""
     s = get_settings()
     provider, model = s.agent_llm(agent)
     params: dict = {"model": model}
-    if provider == "ollama" and s.ollama_reasoning_effort:
+    effort = effort or getattr(s, f"{agent}_reasoning_effort", "") or (
+        s.ollama_reasoning_effort if provider == "ollama" else ""
+    )
+    if effort and (provider == "ollama" or _groq_reasons(model)):
         # Thinking models (qwen3) otherwise spend most of the time and token budget reasoning.
-        params["reasoning_effort"] = s.ollama_reasoning_effort
+        params["reasoning_effort"] = effort
     return client(provider), params
 
 
-async def complete(agent: str, messages: list[dict], temperature: float, max_tokens: int) -> str:
-    llm, params = _request(agent)
+def _groq_reasons(model: str) -> bool:
+    """Groq accepts reasoning_effort only for its reasoning models (gpt-oss, qwen); others reject it."""
+    return model.startswith("openai/gpt-oss") or model.startswith("qwen")
+
+
+async def complete(
+    agent: str, messages: list[dict], temperature: float, max_tokens: int, effort: str | None = None
+) -> str:
+    llm, params = _request(agent, effort)
     resp = await llm.chat.completions.create(
         **params, messages=messages, temperature=temperature, max_tokens=max_tokens
     )
     return _strip_think(resp.choices[0].message.content or "")
 
 
-async def stream(agent: str, messages: list[dict], temperature: float, max_tokens: int) -> AsyncIterator[str]:
-    llm, params = _request(agent)
+async def stream(
+    agent: str, messages: list[dict], temperature: float, max_tokens: int, effort: str | None = None
+) -> AsyncIterator[str]:
+    llm, params = _request(agent, effort)
     resp = await llm.chat.completions.create(
         **params, messages=messages, temperature=temperature, max_tokens=max_tokens, stream=True
     )

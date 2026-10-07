@@ -10,3 +10,4 @@ pypdf
 python-dotenv
 python-multipart
 pydantic-settings
+supermemory>=5,<6

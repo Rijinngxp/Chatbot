@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import memory
 from .api import routers
 from .config import get_settings
 from .rag.models import reranker
@@ -23,11 +24,12 @@ async def lifespan(_: FastAPI):
         if settings.enable_reranker:
             await asyncio.to_thread(reranker)
     yield
+    await memory.close()
 
 
 app = FastAPI(
     title="Multi-Agent RAG Chatbot",
-    description="Research agent → RAG / Web tools → Verifier agent → Synthesizer agent",
+    description="Memory (Supermemory) → Planner agent → RAG / Web tools → Verifier agent → Synthesizer agent",
     version="1.0.0",
     lifespan=lifespan,
 )

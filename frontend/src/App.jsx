@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { deleteDocument, getConfig, listDocuments, streamChat, uploadDocumentStream } from "./api.js";
+import { deleteDocument, getConfig, listDocuments, newId, streamChat, uploadDocumentStream } from "./api.js";
 import { applyEvent, finishRun, newRun } from "./pipeline.js";
 import { applyIngestEvent, failIngestJob, newIngestJob } from "./ingest.js";
 import Sidebar from "./components/Sidebar.jsx";
@@ -20,6 +20,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState("documents");
   const [selectedRun, setSelectedRun] = useState(null); // index of the assistant message shown in the Pipeline tab
+  const [conversationId, setConversationId] = useState(newId); // groups this chat's turns in long-term memory
   const docs = useDocuments(config);
   const abortRef = useRef(null);
   const scrollRef = useRef(null);
@@ -65,7 +66,7 @@ export default function App() {
 
     abortRef.current = new AbortController();
     try {
-      await streamChat({ message: text, history, webSearch }, onEvent, abortRef.current.signal);
+      await streamChat({ message: text, history, webSearch, conversationId }, onEvent, abortRef.current.signal);
     } catch (e) {
       const stopped = e.name === "AbortError";
       updateMessage(index, (m) => ({ ...m, error: stopped ? null : e.message, stopped, done: true }));
@@ -80,6 +81,7 @@ export default function App() {
     abortRef.current?.abort();
     setMessages([]);
     setSelectedRun(null);
+    setConversationId(newId());
   };
 
   const showPipeline = (index) => {
