@@ -4,6 +4,7 @@ from datetime import date
 
 from . import llm
 from .config import get_settings
+from .domains import active_domain
 from .memory import format_memories
 from .prompt import (
     PLANNER_SYSTEM,
@@ -71,7 +72,10 @@ class PlannerAgent:
                 "unsafe_categories": [], "reasoning": f"Planning failed ({exc}); searching.",
             }
 
-        route = plan.get("route") if plan.get("route") in ("unsafe", "greeting", "memory") else "search"
+        routes = ("unsafe", "out_of_scope", "greeting", "memory") if active_domain().restricted else (
+            "unsafe", "greeting", "memory"
+        )
+        route = plan.get("route") if plan.get("route") in routes else "search"
         if route == "memory" and not memories:  # nothing remembered, so memory can't be the answer
             route = "search"
         query = (plan.get("search_query") or "").strip()
@@ -112,8 +116,18 @@ class VerifierAgent:
         valid_ids = {src["id"] for src in sources}
         unsafe = {i for i in result.get("unsafe_sources") or [] if i in valid_ids}
         result["unsafe_sources"] = sorted(unsafe)
-        # A source flagged unsafe can never be used, even if the model also listed it as relevant.
-        result["relevant_sources"] = [i for i in result.get("relevant_sources") or [] if i in valid_ids and i not in unsafe]
+        # Domain check (restricted domains only): an off-domain question is declined, off-domain sources dropped.
+        if active_domain().restricted:
+            result["in_domain"] = result.get("in_domain") is not False and result["verdict"] != "out_of_scope"
+            off_domain = {i for i in result.get("off_domain_sources") or [] if i in valid_ids}
+        else:
+            result["in_domain"], off_domain = True, set()
+        result["off_domain_sources"] = sorted(off_domain)
+        # A source flagged unsafe or off-domain can never be used, even if the model also listed it as relevant.
+        excluded = unsafe | off_domain
+        result["relevant_sources"] = [
+            i for i in result.get("relevant_sources") or [] if i in valid_ids and i not in excluded
+        ]
         try:
             result["confidence"] = float(result.get("confidence", 1.0))
         except (TypeError, ValueError):

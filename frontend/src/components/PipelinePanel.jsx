@@ -42,6 +42,8 @@ export default function PipelinePanel({ run }) {
         <div className="run-tags">
           {run.route === "unsafe" ? (
             <span className="tag tag-blocked"><Icon name="shield" size={12} /> Blocked by safety check</span>
+          ) : run.route === "out_of_scope" ? (
+            <span className="tag tag-blocked"><Icon name="compass" size={12} /> Outside the assistant's domain</span>
           ) : run.route === "greeting" ? (
             <span className="tag tag-fast"><Icon name="sparkles" size={12} /> Greeting · fast path</span>
           ) : run.route === "memory" ? (
@@ -76,18 +78,11 @@ export default function PipelinePanel({ run }) {
                   {s.detail && <> · {s.detail}</>}
                 </div>
 
-                {stage.key === "memory" && run.memories.length > 0 && (
-                  <div className="step-card">
-                    <span className="card-label">What I remember about you</span>
-                    <ul className="memory-list">
-                      {run.memories.map((m) => <li key={m.id}>{m.text}</li>)}
-                    </ul>
-                  </div>
-                )}
-
                 {stage.key === "planner" && run.reasoning && (
                   <div className="step-card">
-                    <span className="card-label">Decision · {run.route === "unsafe" ? "blocked" : run.route}</span>
+                    <span className="card-label">
+                      Decision · {run.route === "unsafe" ? "blocked" : run.route === "out_of_scope" ? "out of scope" : run.route}
+                    </span>
                     <span>{run.reasoning}</span>
                   </div>
                 )}
@@ -134,6 +129,9 @@ function VerifierSummary({ v }) {
         <span className={`verdict ${tone}`}>{v.verdict}</span>
         {v.relevant_sources && <span className="muted small">{v.relevant_sources.length} relevant sources</span>}
         {v.unsafe_sources?.length > 0 && <span className="muted small">· {v.unsafe_sources.length} unsafe dropped</span>}
+        {v.off_domain_sources?.length > 0 && (
+          <span className="muted small">· {v.off_domain_sources.length} off-domain dropped</span>
+        )}
       </div>
       {conf != null && (
         <div className="meter" aria-label={`Confidence ${conf}%`}>
@@ -145,6 +143,7 @@ function VerifierSummary({ v }) {
         <Check ok={v.relevant_sources ? v.relevant_sources.length > 0 : undefined} label="Relevant" />
         <Check ok={v.is_sufficient} label="Sufficient" />
         <Check ok={!v.contains_explicit_content} label="Safe" />
+        <Check ok={v.in_domain} label="In domain" />
       </div>
       {v.explicit_categories?.length > 0 && <p className="issues-text">Flagged: {v.explicit_categories.join(", ")}</p>}
       {v.missing && <p className="issues-text">Missing: {v.missing}</p>}

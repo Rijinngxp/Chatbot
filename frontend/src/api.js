@@ -69,7 +69,7 @@ export async function forgetMemory() {
 }
 
 /** POSTs a chat request and calls onEvent for every Server-Sent Event from the agent pipeline. */
-export async function streamChat({ message, history, webSearch, conversationId }, onEvent, signal) {
+export async function streamChat({ message, history, webSearch, useMemory, conversationId }, onEvent, signal) {
   const r = await fetch(`${BASE}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -77,6 +77,7 @@ export async function streamChat({ message, history, webSearch, conversationId }
       message,
       history,
       web_search: webSearch,
+      use_memory: useMemory,
       user_id: userId(),
       conversation_id: conversationId,
     }),

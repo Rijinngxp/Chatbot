@@ -26,6 +26,14 @@ export default function SettingsPanel({ config }) {
     <div className="panel">
       <p className="muted small">Read-only. Change these in <code>backend/.env</code> and restart the API.</p>
 
+      <div className="section-head"><span>Domain</span></div>
+      <div className="kv">
+        <span>{config.domain?.restricted ? "Answers only" : "Topics"}</span>
+        <span className={`status-chip ${config.domain?.restricted ? "on" : "off"}`}>
+          {config.domain?.restricted ? config.domain.title : "Any topic"}
+        </span>
+      </div>
+
       <div className="section-head"><span>API keys</span></div>
       <div className="kv">
         <span>Groq</span>

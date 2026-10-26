@@ -7,6 +7,7 @@ import ChatMessage from "./components/ChatMessage.jsx";
 import Composer from "./components/Composer.jsx";
 import Icon from "./components/Icons.jsx";
 
+// Used until the backend config (with the domain's own suggestions) has loaded.
 const SUGGESTIONS = [
   "Summarize the key points of my uploaded documents",
   "What does the refund policy say?",
@@ -37,7 +38,7 @@ export default function App() {
   const updateMessage = (index, fn) =>
     setMessages((msgs) => msgs.map((m, i) => (i === index ? fn(m) : m)));
 
-  const send = async (text, webSearch) => {
+  const send = async (text, webSearch, useMemory = true) => {
     if (!text.trim() || busy) return;
     const history = messages
       .filter((m) => m.content && !m.error)
@@ -66,7 +67,7 @@ export default function App() {
 
     abortRef.current = new AbortController();
     try {
-      await streamChat({ message: text, history, webSearch, conversationId }, onEvent, abortRef.current.signal);
+      await streamChat({ message: text, history, webSearch, useMemory, conversationId }, onEvent, abortRef.current.signal);
     } catch (e) {
       const stopped = e.name === "AbortError";
       updateMessage(index, (m) => ({ ...m, error: stopped ? null : e.message, stopped, done: true }));
@@ -90,6 +91,7 @@ export default function App() {
   };
 
   const run = selectedRun != null ? messages[selectedRun]?.run : null;
+  const domain = config?.domain; // DOMAIN from backend/.env: what the assistant is for
 
   return (
     <div className="app">
@@ -105,7 +107,7 @@ export default function App() {
       <main className="main">
         <header className="topbar">
           <div className="topbar-title">
-            <h1>Research Assistant</h1>
+            <h1>{domain?.title || "Research Assistant"}</h1>
             <span className="topbar-sub">
               {docs.items.length} document{docs.items.length === 1 ? "" : "s"} indexed
               {config?.models && <> · {config.models.synthesizer}</>}
@@ -126,13 +128,14 @@ export default function App() {
           {messages.length === 0 ? (
             <div className="welcome">
               <div className="welcome-mark"><Icon name="sparkles" size={22} /></div>
-              <h2>What would you like to research?</h2>
+              <h2>{domain?.restricted ? `Ask me a ${domain.name} question` : "What would you like to research?"}</h2>
               <p>
-                Answers are drafted from your documents and the web, fact-checked by a verifier agent, then refined
+                {domain?.restricted && <>I only answer {domain.name} questions. </>}
+                Answers are drafted from your documents and the web, checked by a verifier agent, then written up
                 by a synthesizer agent. Watch every step live in the Pipeline panel.
               </p>
               <div className="suggestions">
-                {SUGGESTIONS.map((s) => (
+                {(domain?.suggestions || SUGGESTIONS).map((s) => (
                   <button key={s} className="suggestion" onClick={() => send(s, false)}>
                     {s}
                   </button>
@@ -157,6 +160,8 @@ export default function App() {
           onSend={send}
           onStop={() => abortRef.current?.abort()}
           webAvailable={!!config?.web_search}
+          memoryAvailable={!!config?.memory}
+          placeholder={domain?.restricted ? `Ask a ${domain.name} question…` : undefined}
           onAttach={(files) => {
             setTab("documents"); // show the live ingestion pipeline
             docs.upload(files);

@@ -17,7 +17,9 @@ async def chat_stream(req: ChatRequest) -> StreamingResponse:
 
     async def events():
         try:
-            async for event in run_pipeline(req.message, history, req.web_search, req.user_id, req.conversation_id):
+            async for event in run_pipeline(
+                req.message, history, req.web_search, req.user_id, req.conversation_id, req.use_memory
+            ):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:
             log.exception("pipeline failed")
@@ -29,9 +31,11 @@ async def chat_stream(req: ChatRequest) -> StreamingResponse:
 @router.post("/complete", response_model=ChatResponse, summary="Run the agent pipeline and return one JSON response")
 async def chat_complete(req: ChatRequest) -> ChatResponse:
     history = [m.model_dump() for m in req.history]
-    answer, blocked, sources, verification, stages = "", False, [], None, []
+    answer, blocked, out_of_scope, sources, verification, stages = "", False, False, [], None, []
     try:
-        async for event in run_pipeline(req.message, history, req.web_search, req.user_id, req.conversation_id):
+        async for event in run_pipeline(
+            req.message, history, req.web_search, req.user_id, req.conversation_id, req.use_memory
+        ):
             match event["type"]:
                 case "stage":
                     stages.append(event)
@@ -41,7 +45,11 @@ async def chat_complete(req: ChatRequest) -> ChatResponse:
                     verification = event["result"]
                 case "done":
                     answer, blocked = event["answer"], event.get("blocked", False)
+                    out_of_scope = event.get("out_of_scope", False)
     except Exception as exc:
         log.exception("pipeline failed")
         raise HTTPException(502, str(exc)) from exc
-    return ChatResponse(answer=answer, blocked=blocked, sources=sources, verification=verification, stages=stages)
+    return ChatResponse(
+        answer=answer, blocked=blocked, out_of_scope=out_of_scope, sources=sources, verification=verification,
+        stages=stages,
+    )

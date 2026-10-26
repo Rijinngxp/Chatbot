@@ -4,12 +4,16 @@ Supermemory first recalls what it remembers about the user (fails soft); the pla
 memories in view. Every answered turn is saved back to memory in the background:
 
     unsafe:              Memory -> Planner -> blocked
+    outside the domain:  Memory -> Planner -> "I only cover <domain>"    (restricted DOMAIN only; also Verifier)
     greeting:            Memory -> Planner -> Synthesizer
     answer in memory:    Memory -> Planner -> Synthesizer            (no RAG / web / verifier)
     search (web off):    Memory -> Planner -> RAG search -> Verifier (question + chunks) -> Synthesizer
     search (web on):     Memory -> Planner -> Web search -> Verifier (question + results) -> Synthesizer
     unsafe (late):       Verifier -> blocked
 
+DOMAIN (domains.py) makes the assistant domain-only: the planner declines off-topic requests, the verifier checks
+the question and every source against the domain (off-domain sources are dropped) and the synthesizer follows
+the domain's answer rules.
 The planner uses the memories to turn personal references ("weather in my city") into concrete search queries.
 The verifier and the synthesizer are reasoning agents: they think (VERIFIER_/SYNTHESIZER_REASONING_EFFORT)
 before they answer.
@@ -23,6 +27,7 @@ from collections.abc import AsyncIterator
 from . import memory
 from .agents import PlannerAgent, SynthesizerAgent, VerifierAgent
 from .config import get_settings
+from .domains import active_domain
 from .tools import rag_tool, web_search
 
 BLOCKED_MESSAGE = (
@@ -44,6 +49,14 @@ def stage(name: str, status: str, detail: str = "", **data) -> dict:
 
 def numbered(sources: list[dict]) -> list[dict]:
     return [{**src, "id": i} for i, src in enumerate(sources, start=1)]
+
+
+def out_of_scope_events(skip: tuple[str, ...]) -> list[dict]:
+    """Polite "I only cover <domain>" reply for a request outside the active domain. Not saved to memory."""
+    message = active_domain().out_of_scope_message
+    events = [stage(name, "skipped", "Outside the domain") for name in skip]
+    events += [{"type": "token", "content": message}, {"type": "done", "answer": message, "out_of_scope": True}]
+    return events
 
 
 def blocked_events(categories: list[str], skip: tuple[str, ...]) -> list[dict]:
@@ -77,17 +90,21 @@ async def run_pipeline(
     use_web: bool,
     user_id: str | None = None,
     conversation_id: str | None = None,
+    use_memory: bool = True,
 ) -> AsyncIterator[dict]:
     s = get_settings()
+    memory_on = s.memory_available and use_memory and bool(user_id)  # use_memory = the UI's Memory toggle
 
     def remember(answer: str) -> None:
-        if user_id and answer.strip() and s.memory_available and s.memory_save_conversations:
+        if memory_on and answer.strip() and s.memory_save_conversations:
             memory.save_turn_in_background(user_id, conversation_id, question, answer)
 
     # 1. Memory: what do we already know about this user?
     memories: list[dict] = []
     if not s.memory_available:
         yield stage("memory", "skipped", "Disabled (ENABLE_MEMORY / SUPERMEMORY_API_KEY)")
+    elif not use_memory:
+        yield stage("memory", "skipped", "Memory is off for this message: nothing recalled or saved")
     elif not user_id:
         yield stage("memory", "skipped", "No user id sent")
     else:
@@ -96,13 +113,13 @@ async def run_pipeline(
             memories = await memory.recall(user_id, question)
             n = len(memories)
             detail = f"{n} memor{'y' if n == 1 else 'ies'} recalled" if n else "Nothing remembered yet"
-            yield stage("memory", "done", detail, memories=memories)
+            yield stage("memory", "done", detail)  # only the count reaches the browser, never the memories
         except TimeoutError:
             yield stage("memory", "warning", f"Timed out after {s.memory_timeout:g}s; continuing without memory")
         except Exception as exc:  # memory is a nice-to-have: never let it break the answer
             yield stage("memory", "warning", f"Unavailable, continuing without memory ({exc})")
 
-    # 2. Planner (sees the memories): unsafe, greeting, answered by memory, or search?
+    # 2. Planner (sees the memories): unsafe, outside the domain, greeting, answered by memory, or search?
     yield stage("planner", "running", "Understanding the request")
     plan = await planner.plan(question, history, memories)
     route = plan["route"]
@@ -113,6 +130,15 @@ async def run_pipeline(
         yield stage("planner", "blocked", f"Unsafe request ({label})", route="unsafe", reasoning=plan["reasoning"])
         yield {"type": "sources", "sources": []}
         for event in blocked_events(categories, skip=("rag", "web", "verifier", "synthesizer")):
+            yield event
+        return
+
+    domain = active_domain()
+    if route == "out_of_scope":  # only produced for a restricted DOMAIN
+        yield stage("planner", "blocked", f"Outside {domain.name}: politely declined", route="out_of_scope",
+                    reasoning=plan["reasoning"])
+        yield {"type": "sources", "sources": []}
+        for event in out_of_scope_events(skip=("rag", "web", "verifier", "synthesizer")):
             yield event
         return
 
@@ -199,18 +225,30 @@ async def run_pipeline(
                     yield event
                 return
 
-            # Keep only safe, relevant sources (renumbered). An approval that lists none keeps every safe source.
+            # The question is outside the domain (restricted DOMAIN only): decline instead of answering.
+            if not verification["in_domain"]:
+                yield stage("verifier", "blocked", f"Question is outside {domain.name}", route="out_of_scope")
+                yield {"type": "sources", "sources": []}
+                for event in out_of_scope_events(skip=("synthesizer",)):
+                    yield event
+                return
+
+            # Keep only safe, in-domain, relevant sources (renumbered). An approval that lists none keeps every
+            # safe in-domain source.
             total = len(sources)
             relevant = set(verification["relevant_sources"])
             unsafe = set(verification["unsafe_sources"])
+            off_domain = set(verification["off_domain_sources"])
             if relevant or verification["verdict"] != "approve":
                 sources = [src for src in sources if src["id"] in relevant]
             else:
-                sources = [src for src in sources if src["id"] not in unsafe]
+                sources = [src for src in sources if src["id"] not in unsafe | off_domain]
             sources = numbered(sources)
             yield {"type": "sources", "sources": sources}
 
-            dropped = f", {len(unsafe)} unsafe dropped" if unsafe else ""
+            dropped = (f", {len(unsafe)} unsafe dropped" if unsafe else "") + (
+                f", {len(off_domain)} off-domain dropped" if off_domain else ""
+            )
             if not total and memories and verification["verdict"] == "approve":
                 yield stage("verifier", "done", "Answerable from what I remember about you")
             elif not total:

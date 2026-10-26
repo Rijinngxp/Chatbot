@@ -3,6 +3,7 @@ import asyncio
 from fastapi import APIRouter
 
 from ..config import get_settings
+from ..domains import active_domain
 from ..rag.store import get_store
 from ..schemas import HealthResponse
 
@@ -24,6 +25,7 @@ def config() -> dict:
         "verifier": s.enable_verifier,
         "reranker": s.enable_reranker,
         "memory": s.memory_available,
+        "domain": {k: getattr(active_domain(), k) for k in ("key", "name", "title", "restricted", "suggestions")},
         # e.g. {"planner": "ollama · qwen3:4b", "verifier": "groq · openai/gpt-oss-120b", ...}
         "models": {a: " · ".join(s.agent_llm(a)) for a in ("planner", "verifier", "synthesizer")},
         # Only a problem when some agent actually uses Groq.

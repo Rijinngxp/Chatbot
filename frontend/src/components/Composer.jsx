@@ -1,15 +1,16 @@
 import { useRef, useState } from "react";
 import Icon from "./Icons.jsx";
 
-export default function Composer({ busy, onSend, onStop, webAvailable, onAttach }) {
+export default function Composer({ busy, onSend, onStop, webAvailable, memoryAvailable, placeholder, onAttach }) {
   const [text, setText] = useState("");
   const [web, setWeb] = useState(false); // on = search the web instead of your documents
+  const [memory, setMemory] = useState(true); // on = recall from and save to Supermemory
   const fileRef = useRef(null);
   const inputRef = useRef(null);
 
   const submit = () => {
     if (!text.trim() || busy) return;
-    onSend(text.trim(), web && webAvailable);
+    onSend(text.trim(), web && webAvailable, memory && memoryAvailable);
     setText("");
     inputRef.current?.focus();
   };
@@ -21,7 +22,7 @@ export default function Composer({ busy, onSend, onStop, webAvailable, onAttach 
           ref={inputRef}
           value={text}
           rows={1}
-          placeholder="Ask a question about your documents or the web…"
+          placeholder={placeholder || "Ask a question about your documents or the web…"}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -41,6 +42,22 @@ export default function Composer({ busy, onSend, onStop, webAvailable, onAttach 
               onClick={() => setWeb((v) => !v)}
             >
               <Icon name="globe" size={14} /> Web search
+            </button>
+            <button
+              type="button"
+              className={`toggle ${memory && memoryAvailable ? "on" : ""}`}
+              disabled={!memoryAvailable}
+              aria-pressed={memory && memoryAvailable}
+              title={
+                !memoryAvailable
+                  ? "Memory is disabled (ENABLE_MEMORY / SUPERMEMORY_API_KEY)"
+                  : memory
+                    ? "Memory on: recalls what it knows about you and remembers this chat (Supermemory)"
+                    : "Memory off: nothing is recalled or saved for your messages"
+              }
+              onClick={() => setMemory((v) => !v)}
+            >
+              <Icon name="bookmark" size={14} /> Memory
             </button>
             <button type="button" className="icon-btn" title="Upload documents" onClick={() => fileRef.current?.click()}>
               <Icon name="paperclip" size={15} />

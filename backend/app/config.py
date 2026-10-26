@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     ollama_reasoning_effort: str = "none"   # thinking models (qwen3): none = fastest | low | medium | high | "" = model default
     tavily_api_key: str = ""
 
+    # --- Domain: what the assistant is for (see app/domains.py) ---
+    domain: str = "healthcare"              # healthcare | technology | general (general = any topic)
+
     # --- Feature switches ---
     enable_rag: bool = True
     enable_web_search: bool = True          # if false, the UI web-search button is disabled

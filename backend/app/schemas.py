@@ -17,6 +17,7 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
     history: list[Message] = []
     web_search: bool = False
+    use_memory: bool = Field(True, description="Recall from and save to long-term memory for this message")
     user_id: str | None = Field(None, pattern=ID_PATTERN, description="Scopes long-term memory to one user")
     conversation_id: str | None = Field(None, pattern=ID_PATTERN, description="Groups this chat's turns in memory")
 
@@ -34,6 +35,7 @@ class Source(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     blocked: bool = False
+    out_of_scope: bool = False  # declined because the question is outside the configured DOMAIN
     sources: list[Source] = []
     verification: dict[str, Any] | None = None
     stages: list[dict[str, Any]] = []

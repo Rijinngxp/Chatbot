@@ -1,7 +1,10 @@
 # Multi-Agent RAG Chatbot
 
+A domain-specific assistant: set `DOMAIN` in `backend/.env` to `healthcare` (default), `technology`, or `general` (any topic). Profiles live in `backend/app/domains.py`.
+
 ```
 unsafe:            Memory → Planner → blocked
+outside domain:    Memory → Planner → "I only cover <domain>"   (the Verifier declines it too if it slips through)
 greeting:          Memory → Planner → Synthesizer
 answer in memory:  Memory → Planner → Synthesizer          (no RAG / web / verifier)
 search, web off:   Memory → Planner → RAG search → Verifier (question + chunks) → Synthesizer
@@ -11,6 +14,7 @@ every answer:      → Memory save, in the background
 
 | Component | Implementation |
 |---|---|
+| Domain | `DOMAIN` picks a profile (role, scope, out-of-scope examples, answer rules, UI suggestions) that every agent prompt is built around |
 | UI | React (Vite) — chat, live pipeline tracker, **Web search** toggle, document upload, sources & verification panel |
 | Planner agent | Groq LLM: sees the recalled memories and decides unsafe / greeting / memory (the answer is already remembered) / search, and writes a standalone search query |
 | RAG tool | Semantic chunking → ChromaDB (dense `bge-small` vectors) + in-memory BM25 keyword index → RRF hybrid fusion → `bge-reranker-v2-m3` cross-encoder rerank |
@@ -47,6 +51,14 @@ First start downloads the embedding model (~70 MB) and the bge-reranker-v2-m3 in
 6. **Memory save**: the question and answer are appended (in the background) to one Supermemory document per conversation; Supermemory extracts the facts worth keeping. Blocked requests are never saved.
 
 The verifier can be turned off with `ENABLE_VERIFIER=false`; RAG with `ENABLE_RAG=false`; memory with `ENABLE_MEMORY=false` (it is also off when no `SUPERMEMORY_API_KEY` / `SUPERMEMORY_BASE_URL` is set).
+
+### Domain (healthcare / technology / general)
+With a restricted domain the assistant only handles that domain, in three layers:
+1. **Planner** routes off-topic requests to `out_of_scope` and replies "I only cover <domain>" with no search. Greetings and questions about the user themselves are always allowed; a mixed question is answered for its in-domain part only.
+2. **Verifier** checks the question against the domain (verdict `out_of_scope` → declined) and every retrieved document chunk or web result (`off_domain_sources` are dropped, e.g. an unrelated uploaded PDF).
+3. **Synthesizer** answers as the domain specialist and follows the domain's answer rules — for healthcare: general information not diagnosis, recommend a professional, emergency signs first, doses only from the sources; for technology: code blocks, versions, security risks.
+
+Add a domain by adding a `Domain(...)` entry to `DOMAINS` in `backend/app/domains.py`. `DOMAIN=general` restores the open, any-topic assistant.
 
 ### Memory and user identity
 Each browser gets an anonymous id (a UUID in `localStorage`) that scopes its memory to its own Supermemory namespace; **New chat** starts a new conversation id. This is not authentication — anyone who knows an id can read or erase that memory — so put real login in front of the API before exposing it publicly. Settings → Memory shows what is remembered and has a **Forget me** button.

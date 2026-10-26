@@ -17,10 +17,9 @@ export function newRun(question, webSearch) {
     endedAt: null,
     stages: Object.fromEntries(STAGES.map((s) => [s.key, { status: "pending", detail: "", start: null, end: null }])),
     log: [],
-    route: null, // planner's decision: "greeting" | "memory" | "search" | "unsafe"
+    route: null, // planner's decision: "greeting" | "memory" | "search" | "unsafe" | "out_of_scope"
     reasoning: null, // planner's explanation
     query: null, // planner's search query
-    memories: [], // facts recalled about the user before planning
     verifications: [],
     sourceCount: 0,
     outcome: null, // "answered" | "blocked" | "error" | "stopped"
@@ -45,7 +44,6 @@ export function applyEvent(run, evt) {
       if (evt.route) r.route = evt.route;
       if (evt.reasoning) r.reasoning = evt.reasoning;
       if (evt.query) r.query = evt.query;
-      if (evt.memories) r.memories = evt.memories;
       r.log = [...r.log, { t: now, stage: evt.stage, status: evt.status, text: evt.detail || evt.status }];
       break;
     }
